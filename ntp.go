@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/binary"
-	"log"
+	"fmt"
 	"net"
 	"time"
 )
@@ -64,39 +64,47 @@ type NtpPackage struct {
 	TransmitNano   uint32
 }
 
-func (ntp *Ntp) GetTime() time.Time {
-	ntpTime := ntp.sendRequest()
+func NewNtp(server string, port string, timeout int) *Ntp {
+	timeoutDuration := time.Duration(timeout)
+	if timeoutDuration == 0 {
+		timeoutDuration = time.Duration(ntpDefaultTimeout)
+	}
+
+	return &Ntp{server, port, time.Duration(timeoutDuration)}
+}
+
+func (ntp *Ntp) GetTime() (time.Time, error) {
+	ntpTime, err := ntp.sendRequest()
+	if err != nil {
+		return time.Now(), err
+	}
+
 	seconds := int64(uint64(ntpTime.TransmitSec) - ntpEpochOffset)
 	nano := int64(ntpTime.TransmitNano) * 1e9 >> 32
 
-	return time.Unix(seconds, nano)
+	return time.Unix(seconds, nano), nil
 }
 
-func (ntp *Ntp) sendRequest() *NtpPackage {
+func (ntp *Ntp) sendRequest() (*NtpPackage, error) {
 	client, err := net.Dial("udp", net.JoinHostPort(ntp.Server, ntp.Port))
 	if err != nil {
-		log.Fatalf("Connection error: %s", err)
+		return nil, fmt.Errorf("Connection error: %s", err)
 	}
 	defer client.Close()
 
-	timeout := time.Duration(ntp.Timeout)
-	if timeout == 0 {
-		timeout = time.Duration(ntpDefaultTimeout)
-	}
-
-	if err = client.SetDeadline(time.Now().Add(timeout * time.Second)); err != nil {
-		log.Fatalf("Failed to set deadline: %s", err)
+	if err = client.SetDeadline(time.Now().Add(ntp.Timeout * time.Second)); err != nil {
+		return nil, fmt.Errorf("Failed to set deadline: %s", err)
 	}
 
 	request := &NtpPackage{Settings: 0x1B}
 	if err = binary.Write(client, binary.BigEndian, request); err != nil {
-		log.Fatalf("Failed to send request: %s", err)
+		return nil, fmt.Errorf("Failed to send request: %s", err)
 	}
 
 	response := &NtpPackage{}
 	if err = binary.Read(client, binary.BigEndian, response); err != nil {
-		log.Fatalf("Failed to read response: %s", err)
+		return nil, fmt.Errorf("Failed to read response: %s", err)
 	}
 
-	return response
+	return response, nil
 }
